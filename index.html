@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sim_notify Dashboard</title>
+<style>
+  :root { --bg:#0f141a; --panel:#161d26; --line:#263241; --text:#e6edf3; --muted:#8b98a8; --ok:#3fb950; --fail:#f85149; --new:#ffa657; --known:#79c0ff; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:18px 28px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px; }
+  header h1 { margin:0; font-size:20px; } header .sub { color:var(--muted); font-size:13px; }
+  main { display:grid; grid-template-columns: 1fr 1fr; gap:18px; padding:18px 28px; max-width:1500px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  section h2 { margin:0 0 10px; font-size:15px; color:var(--accent); }
+  .full { grid-column: 1 / -1; }
+  .drop { border:1.5px dashed var(--line); border-radius:8px; padding:14px; text-align:center; color:var(--muted); font-size:13px; cursor:pointer; }
+  .drop:hover { border-color:var(--accent); color:var(--text); }
+  .kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin:12px 0; }
+  .kpi { background:#0f141a; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .kpi .v { font-size:22px; font-weight:700; } .kpi .l { font-size:11px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; font-size:11.5px; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; }
+  .b-ok { background:rgba(63,185,80,.18); color:var(--ok);} .b-fail { background:rgba(248,81,73,.18); color:var(--fail);} .b-done{ background:rgba(139,152,168,.2); color:var(--muted);} .b-int{ background:rgba(255,166,87,.18); color:var(--new);}
+  .t-new { color:var(--new); } .t-known { color:var(--known); }
+  pre { background:#0b0f14; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:12px; overflow:auto; max-height:260px; margin:8px 0; }
+  textarea { width:100%; min-height:120px; background:#0b0f14; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px; font-family:Consolas,monospace; font-size:12px; }
+  button { background:var(--accent); color:#06111f; border:0; border-radius:6px; padding:7px 12px; font-weight:700; cursor:pointer; font-size:12.5px; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+  .muted { color:var(--muted); font-size:12px; }
+  svg text { font-size:10px; fill:var(--muted); }
+  .warn { color:var(--new); font-size:12px; }
+  @media (max-width:900px){ main{grid-template-columns:1fr;} .kpis{grid-template-columns:repeat(2,1fr);} }
+</style>
+</head>
+<body>
+<header><h1>sim_notify Dashboard <span style="font-size:11px;color:var(--muted)">v1.1</span></h1><span class="sub">RTL 시뮬·합성 로그 판정 · NEW/known 분류 · 실행 이력 — 모든 처리는 브라우저 안에서만 (서버 전송 없음)</span></header>
+<main>
+  <section class="full">
+    <h2>1. 실행 이력 (runs.csv)</h2>
+    <div class="row">
+      <label class="drop" style="flex:1">runs.csv 또는 synth_logs/index.csv 를 여기에 끌어다 놓거나 클릭해서 선택 <input type="file" id="csvFile" accept=".csv" hidden></label>
+      <button class="ghost" id="demoCsv">예시 데이터 보기</button>
+    </div>
+    <div class="kpis" id="kpis"></div><div class="muted" id="srcNote"></div>
+    <div class="row" style="align-items:flex-start">
+      <div style="flex:2; overflow:auto"><table id="runsTable"></table></div>
+      <div style="flex:1; min-width:260px"><div class="muted">실행별 errors (NEW=주황, known=파랑)</div><svg id="chart" width="100%" height="160" viewBox="0 0 320 160"></svg></div>
+    </div>
+    <div id="verifyOut" class="muted"></div>
+  </section>
+
+  <section>
+    <h2>2. 로그 판정 (브라우저에서 check)</h2>
+    <label class="drop">시뮬·합성 로그(.log/.txt)를 여기에 <input type="file" id="logFile" accept=".log,.txt" hidden></label>
+    <div class="row"><span class="muted">프로파일:</span><select id="profile"><option value="auto">auto</option><option value="vcs">vcs</option><option value="xcelium">xcelium</option><option value="dc">dc</option></select>
+      <label class="muted"><input type="checkbox" id="newOnly" checked> --new-only (NEW가 있을 때만 FAIL)</label></div>
+    <div id="judge"></div>
+    <pre id="matched" style="display:none"></pre>
+  </section>
+
+  <section>
+    <h2>3. known_errors.txt (사람이 승인한 무해 에러 패턴)</h2>
+    <div class="muted">한 줄에 정규식 하나, # 뒤는 주석. 바꾸면 2번 판정이 즉시 다시 계산됩니다. <span class="warn" id="knownWarn"></span></div>
+    <textarea id="known"></textarea>
+    <div class="row"><button id="saveKnown">이 브라우저에 저장</button><button class="ghost" id="dlKnown">known_errors.txt 내려받기</button><button class="ghost" id="resetKnown">기본값</button></div>
+  </section>
+
+  <section class="full">
+    <h2>4. triage 발췌 — 첫 에러 ±N줄 (AI에 넘길 때 이 부분만)</h2>
+    <div class="row"><span class="muted">첫 N건</span><input type="number" id="first" value="3" min="1" max="10" style="width:60px"><span class="muted">문맥 ±</span><input type="number" id="ctx" value="5" min="0" max="20" style="width:60px">
+      <label class="muted"><input type="checkbox" id="mask" checked> 경로 마스킹(/home/…, /opt/…)</label><button class="ghost" id="copyTriage">복사</button></div>
+    <pre id="triage">로그를 올리면 여기에 발췌가 표시됩니다.</pre>
+  </section>
+</main>
+<script>
+// ---- rules: ported 1:1 from sim_notify.py v2.6 PROFILES ----
+const PROFILES = {
+  vcs:     { detect:/Chronologic VCS|V C S   S i m u l a t i o n/, done:/\$finish|--- UVM Report Summary ---|--- SIM DONE ---/im,
+             err:/UVM_(ERROR|FATAL)(?!\s*:\s*\d)|\bError[-:\[]|^Fatal|Segmentation fault/im, warn:/UVM_WARNING(?!\s*:\s*\d)|\bWarning[-:\[]/im, summary:/UVM_ERROR\s*:\s*(\d+)/ },
+  xcelium: { detect:/^xrun\(|TOOL:\s+xrun|xmsim:|Cadence Design Systems/m, done:/Simulation complete via|\$finish|TOOL:\s+xrun.*Exiting/im,
+             err:/xmsim: \*[EF],|Simulation FAILED|\$finish\(1\)|UVM_(ERROR|FATAL)(?!\s*:\s*\d)/im, warn:/xmsim: \*W,(?!RNQUIE)|UVM_WARNING(?!\s*:\s*\d)/im, summary:/UVM_ERROR\s*:\s*(\d+)/ },
+  dc:      { detect:/Design Compiler|DC Ultra|dc_shell/, done:/^Thank you\.\.\.|dc_shell\S*> *exit/im, err:/^Error:/im, warn:/^Warning:/im }
+};
+const DEFAULT_KNOWN = `# known_errors.txt - human-approved list (one regex per line, case-insensitive)
+PWR-201            # SAIF file not found -> no SAIF generated in this flow yet
+UIT-453            # Design has no test model -> DFT not used
+dft_signal_defs.*CMD-015   # dft_signal_defs.tcl not present -> DFT not used
+CTL model attached
+No model found on design`;
+let logText = null, logName = "";
+
+function pickProfile(text, name){ if(name!=="auto") return name; const head=text.slice(0,4000); for(const k in PROFILES){ if(PROFILES[k].detect.test(head)) return k; } return "vcs"; }
+function loadKnown(){ return document.getElementById("known").value.split("\n").map(l=>l.split("#")[0].trim()).filter(Boolean).map(p=>{ try{return new RegExp(p,"i");}catch(e){return null;} }).filter(Boolean); }
+function summarize(text, pname){
+  const p=PROFILES[pname], lines=text.split(/\r?\n/); let errs=0,warns=0,sum=null; const matched=[];
+  const errRe=new RegExp(p.err.source,"i"), warnRe=new RegExp(p.warn.source,"i");
+  lines.forEach((l,i)=>{ if(errRe.test(l)){errs++; matched.push({i:i+1,l});} if(warnRe.test(l)) warns++; if(p.summary){const m=l.match(p.summary); if(m) sum=parseInt(m[1]);} });
+  if(sum!==null) errs=Math.max(errs,sum);
+  const done=p.done.test(lines.slice(-20).join("\n"));
+  return {errs,warns,matched,done,tail:lines.slice(-8)};
+}
+function judge(){
+  if(logText===null||logText===undefined) return;
+  if(!logText.trim()){ document.getElementById("judge").innerHTML=`<div class="warn">빈 로그입니다 (${logName}, 0 byte). 판정하지 않음 — 파일 경로·시뮬레이터 출력 리다이렉션을 확인하세요.</div>`; document.getElementById("matched").style.display="none"; document.getElementById("triage").textContent="(빈 로그 — 발췌 없음)"; return; }
+  const pname=pickProfile(logText, document.getElementById("profile").value);
+  const s=summarize(logText,pname); const kp=loadKnown();
+  const NEW=[],KNOWN=[]; s.matched.forEach(m=>{ (kp.some(r=>r.test(m.l))?KNOWN:NEW).push(m); });
+  const newOnly=document.getElementById("newOnly").checked;
+  const verdict = newOnly ? (NEW.length===0 && s.done ? "SUCCESS":"FAIL") : (s.errs===0 && s.done ? "SUCCESS":"FAIL");
+  document.getElementById("judge").innerHTML = `
+    <div class="kpis" style="grid-template-columns:repeat(5,1fr)">
+      <div class="kpi"><div class="v">${pname}</div><div class="l">profile (auto-detect)</div></div>
+      <div class="kpi"><div class="v">${s.done?"yes":"no"}</div><div class="l">done marker</div></div>
+      <div class="kpi"><div class="v">${s.errs}</div><div class="l">errors</div></div>
+      <div class="kpi"><div class="v"><span class="t-new">${NEW.length}</span> / <span class="t-known">${KNOWN.length}</span></div><div class="l">NEW / known</div></div>
+      <div class="kpi"><div class="v"><span class="badge ${verdict==="SUCCESS"?"b-ok":"b-fail"}">${verdict}</span></div><div class="l">${logName} · warnings=${s.warns}</div></div>
+    </div>`;
+  const pre=document.getElementById("matched"); pre.style.display="block";
+  pre.textContent = s.matched.length ? s.matched.map(m=>`${(kp.some(r=>r.test(m.l))?"KNOWN":"NEW  ")}  L${m.i}: ${m.l.slice(0,160)}`).join("\n") : "(no error lines matched)";
+  triage(s);
+}
+function triage(s){
+  const first=+document.getElementById("first").value, ctx=+document.getElementById("ctx").value, mask=document.getElementById("mask").checked;
+  const lines=logText.split(/\r?\n/); const out=[`# triage excerpt: ${logName}  error_lines=${s.matched.length} (first ${Math.min(first,s.matched.length)}, context +/-${ctx})`];
+  s.matched.slice(0,first).forEach(m=>{ out.push(`--- error at line ${m.i} ---`); for(let i=Math.max(0,m.i-1-ctx); i<Math.min(lines.length,m.i+ctx); i++){ let t=lines[i].slice(0,200); if(mask) t=t.replace(/\/(home|opt|tools)\/\S+/g,"<masked>"); out.push(`${String(i+1).padStart(6)}${i===m.i-1?">>":"  "} ${t}`);} });
+  document.getElementById("triage").textContent=out.join("\n");
+}
+// ---- runs.csv ----
+const FIELDS=["timestamp","name","profile","status","exit_code","elapsed","errors","new_errors","known_errors","warnings","log","sent"];
+function parseCSV(t){ const rows=t.trim().split(/\r?\n/).map(r=>r.split(",")); const h=rows.shift().map(x=>x.trim());
+  return rows.map(r=>{ const o=Object.fromEntries(h.map((k,i)=>[k,(r[i]??"").trim()]));
+    // synth_logs/index.csv (log archive) -> same shape as runs.csv
+    if("run_timestamp" in o){ o.timestamp=o.run_timestamp; o.profile=o.profile||"dc"; o.log=o.local_file||""; o.sent=o.check||""; o.exit_code=o.exit_code||"-"; o.elapsed=o.elapsed||"-"; o.warnings=o.warnings||"0"; }
+    return o; }); }
+function verify(rows){ const p=[]; const arch=rows.length&&("local_file" in rows[0]); rows.forEach((r,i)=>{
+    if(arch){ if(r.check==="MISMATCH") p.push(`row ${i+1}: archive check MISMATCH (log counts differ from runs.csv)`); if(r.status==="UNKNOWN"||r.status==="INTERRUPTED") return; }
+    else if(r.status==="INTERRUPTED"){ if(r.sent&&r.sent!=="no") p.push(`row ${i+1}: INTERRUPTED but sent=${r.sent}`); return; }
+    const miss=FIELDS.filter(k=>!(k in r)||r[k]===""||(arch&&k==="log"&&r.check==="missed_overwritten"?false:false)); if(miss.length&&!(arch&&miss.length===1&&miss[0]==="log")) p.push(`row ${i+1}: empty ${miss.join(",")}`); const e=+r.errors,n=+r.new_errors,k=+r.known_errors; if(n+k!==e) p.push(`row ${i+1}: new+known (${n}+${k}) != errors (${e})`); if(r.status==="SUCCESS"&&r.exit_code!=="0") p.push(`row ${i+1}: SUCCESS with exit=${r.exit_code}`); if(r.status==="SUCCESS"&&n!==0) p.push(`row ${i+1}: SUCCESS with NEW=${n}`); }); return p; }
+function renderRuns(rows){
+  const badge=s=>`<span class="badge ${s==="SUCCESS"?"b-ok":s==="FAIL"?"b-fail":s==="INTERRUPTED"?"b-int":"b-done"}">${s}</span>`; const isArchive=rows.length&&("local_file" in rows[0]);
+  const tot=rows.length, ok=rows.filter(r=>r.status==="SUCCESS").length, fail=rows.filter(r=>r.status==="FAIL").length, newSum=rows.reduce((a,r)=>a+(+r.new_errors||0),0), sent=rows.filter(r=>r.sent==="yes").length;
+  document.getElementById("srcNote").textContent = isArchive ? "출처: synth_logs/index.csv (합성 로그 보관 색인; UNKNOWN = 시각 미상 백필, 검사 제외)" : "출처: runs.csv (sim_notify --runs 이력)";
+  document.getElementById("kpis").innerHTML=[["실행",tot],["SUCCESS",ok],["FAIL",fail],["NEW 에러 합계",newSum],[isArchive?"보관 check=OK":"알림 전송 yes", isArchive?rows.filter(r=>r.check==="OK").length:sent]].map(([l,v])=>`<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+  document.getElementById("runsTable").innerHTML=`<tr><th>시각</th><th>작업</th><th>프로파일</th><th>판정</th><th>exit</th><th>소요</th><th>errors</th><th>NEW</th><th>known</th><th>warn</th><th>${isArchive?"보관 check":"전송"}</th></tr>`+
+    rows.map(r=>`<tr><td>${r.timestamp}</td><td>${r.name}</td><td>${r.profile}</td><td>${badge(r.status)}</td><td>${r.exit_code}</td><td>${r.elapsed}</td><td>${r.errors}</td><td class="t-new">${r.new_errors}</td><td class="t-known">${r.known_errors}</td><td>${r.warnings}</td><td>${r.sent}</td></tr>`).join("");
+  const p=verify(rows); document.getElementById("verifyOut").innerHTML = p.length? `<span class="warn">verify: ${p.length} problem(s)</span><br>${p.join("<br>")}` : `verify: ${rows.length} rows, 0 problem(s)`;
+  const W=320,H=160,pad=24,n=rows.length,bw=Math.max(6,(W-pad*2)/Math.max(n,1)-6),mx=Math.max(1,...rows.map(r=>+r.errors||0));
+  let svg=`<line x1="${pad}" y1="${H-pad}" x2="${W-4}" y2="${H-pad}" stroke="#263241"/>`;
+  rows.forEach((r,i)=>{ const x=pad+i*((W-pad*2)/Math.max(n,1)); const kh=(+r.known_errors||0)/mx*(H-pad*2), nh=(+r.new_errors||0)/mx*(H-pad*2); svg+=`<rect x="${x}" y="${H-pad-kh}" width="${bw}" height="${kh}" fill="#79c0ff"/><rect x="${x}" y="${H-pad-kh-nh}" width="${bw}" height="${nh}" fill="#ffa657"/><text x="${x+bw/2}" y="${H-8}" text-anchor="middle">${i+1}</text>`; });
+  svg+=`<text x="4" y="12">max ${mx}</text>`; document.getElementById("chart").innerHTML=svg;
+}
+const DEMO=`timestamp,name,profile,status,exit_code,elapsed,errors,new_errors,known_errors,warnings,log,sent
+2026-09-30 01:11:02,syn_topo_filter,dc,DONE,0,00:18:53,12,0,0,812,logs/all.log,yes
+2026-10-09 16:51:15,syn_topo_filter,dc,SUCCESS,0,00:17:56,11,0,11,811,logs/all.log,yes
+2026-10-09 16:12:27,syn_new_error,dc,FAIL,0,00:00:00,12,1,11,38,tests/logs/dc_real_plus_new_error.log,print
+2026-10-09 16:12:28,vcs_compile,vcs,FAIL,124,00:00:01,2,2,0,0,tests/logs/vcs_compile_error.log,print`;
+// ---- wiring ----
+const read=(f,cb)=>{const r=new FileReader(); r.onload=e=>cb(e.target.result); r.readAsText(f);};
+document.getElementById("csvFile").onchange=e=>read(e.target.files[0],t=>{ const rows=parseCSV(t); const need=["timestamp","status","errors"]; const bad=need.filter(k=>!(rows.length&&k in rows[0]));
+  if(!rows.length||bad.length){ document.getElementById("kpis").innerHTML=""; document.getElementById("runsTable").innerHTML=""; document.getElementById("chart").innerHTML=""; document.getElementById("verifyOut").innerHTML=""; document.getElementById("srcNote").innerHTML=`<span class="warn">이력 CSV가 아닙니다 (${e.target.files[0].name}): ${rows.length?"필수 열 없음 "+bad.join(","):"행 없음"}. runs.csv 또는 synth_logs/index.csv 를 올리세요.</span>`; return; }
+  renderRuns(rows); });
+document.getElementById("demoCsv").onclick=()=>renderRuns(parseCSV(DEMO));
+document.getElementById("logFile").onchange=e=>{const f=e.target.files[0]; logName=f.name; read(f,t=>{logText=t; judge();});};
+["profile","newOnly","first","ctx","mask"].forEach(id=>document.getElementById(id).onchange=judge);
+const ka=document.getElementById("known"); ka.value=localStorage.getItem("known_errors")||DEFAULT_KNOWN; ka.oninput=()=>{ document.getElementById("knownWarn").textContent="(변경됨 — 저장 전) 패턴을 바꿨으면 고정 로그 세트로 재검사하세요"; judge(); };
+document.getElementById("saveKnown").onclick=()=>{localStorage.setItem("known_errors",ka.value); document.getElementById("knownWarn").textContent="저장됨 (이 브라우저)";};
+document.getElementById("resetKnown").onclick=()=>{ka.value=DEFAULT_KNOWN; judge();};
+document.getElementById("dlKnown").onclick=()=>{const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([ka.value],{type:"text/plain"})); a.download="known_errors.txt"; a.click();};
+document.getElementById("copyTriage").onclick=()=>navigator.clipboard.writeText(document.getElementById("triage").textContent);
+document.querySelectorAll(".drop").forEach(d=>{ d.ondragover=e=>{e.preventDefault();}; d.ondrop=e=>{e.preventDefault(); const inp=d.querySelector("input"); inp.files=e.dataTransfer.files; inp.onchange({target:inp});}; });
+</script>
+</body>
+</html>
